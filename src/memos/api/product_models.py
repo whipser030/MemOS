@@ -433,7 +433,7 @@ class APISearchRequest(BaseRequest):
     )
     # Internal field for search memory type
     search_memory_type: str = Field(
-        "RawFileMemory",
+        "All",
         description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory",
     )
 
@@ -473,7 +473,7 @@ class APISearchRequest(BaseRequest):
     )
 
     neighbor_discovery: bool = Field(
-        False,
+        True,
         description="Whether to enable neighbor discovery. "
         "If enabled, the system will automatically recall neighbor chunks "
         "relevant to the query. Default: False.",
