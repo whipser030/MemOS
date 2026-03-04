@@ -11,7 +11,6 @@ import math
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
-from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -82,15 +81,7 @@ class SearchHandler(BaseHandler):
             results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
             self._strip_embeddings(results)
 
-        text_mem = results["text_mem"]
-        results["text_mem"] = rerank_knowledge_mem(
-            self.reranker,
-            query=search_req.query,
-            text_mem=text_mem,
-            top_k=search_req_local.top_k,
-            file_mem_proportion=0.5,
-        )
-
+        self.logger.info("[0305 gray baseline]")
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
         )
