@@ -433,6 +433,16 @@ class SingleCubeView(MemCubeView):
                     )
             return edge_mems
 
+        rawfilememory_items = [
+            item for item in search_results if item.metadata.memory_type == "RawFileMemory"
+        ]
+        non_rawfilememory_items = [
+            item for item in search_results if item.metadata.memory_type != "RawFileMemory"
+        ]
+        logger.info(
+            f"[0305test] rawfilememory_items: {len(rawfilememory_items)}, non_rawfilememory_items: {len(non_rawfilememory_items)}"
+        )
+
         final_items = []
         if neighbor_discovery:
             for item in search_results:
