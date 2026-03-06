@@ -361,6 +361,7 @@ class MemFeedback(BaseMemFeedback):
         template = FEEDBACK_PROMPT_DICT["compare"][lang]
         if current_memories == []:
             # retrieve
+            logger.info(f"[0306 feedback semantics_feedback] user_name: {user_name}")
             last_user_index = max(i for i, d in enumerate(chat_history_list) if d["role"] == "user")
             last_qa = " ".join([item["content"] for item in chat_history_list[last_user_index:]])
             supplementary_retrieved = self._retrieve(last_qa, info=info, user_name=user_name)
@@ -479,6 +480,7 @@ class MemFeedback(BaseMemFeedback):
     def _feedback_memory(
         self, user_id: str, user_name: str, feedback_memories: list[TextualMemoryItem], **kwargs
     ) -> dict:
+        logger.info(f"[0306 feedback _feedback_memory] user_name: {user_name}")
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
         chat_history = kwargs.get("chat_history", [])
         feedback_content = kwargs.get("feedback_content", "")
@@ -503,7 +505,7 @@ class MemFeedback(BaseMemFeedback):
             for item in retrieved_memories
             if "mode:fast" not in item["metadata"]["tags"]
         ]
-
+        logger.info(f"[0306 feedback _feedback_memory] user_name: {user_name}")
         with ContextThreadPoolExecutor(max_workers=3) as ex:
             futures = {
                 ex.submit(
@@ -553,6 +555,7 @@ class MemFeedback(BaseMemFeedback):
 
     def _retrieve(self, query: str, info=None, top_k=20, user_name=None):
         """Retrieve memory items"""
+        logger.info(f"[feedback _retrieve] user_name: {user_name}")
 
         def check_has_edges(mem_item: TextualMemoryItem) -> tuple[TextualMemoryItem, bool]:
             """Check if a memory item has edges."""
@@ -1014,6 +1017,9 @@ class MemFeedback(BaseMemFeedback):
 
             # llm update memory
             if not chat_history:
+                logger.info(
+                    f"[0306 feedback process_feedback_core _pure_add] user_name: {user_name}"
+                )
                 return self._pure_add(user_name, feedback_content, feedback_time, info)
             else:
                 raw_judge = self._feedback_judgement(
@@ -1029,6 +1035,9 @@ class MemFeedback(BaseMemFeedback):
                 ):
                     return self._pure_add(user_name, feedback_content, feedback_time, info)
 
+                logger.info(
+                    f"[0306 feedback process_feedback_core _feedback_judgement] user_name: {user_name}"
+                )
                 if not valid_feedback:
                     logger.warning(
                         f"[0107 Feedback Core: process_feedback_core] No valid judgements for user {user_name}: {raw_judge}."
