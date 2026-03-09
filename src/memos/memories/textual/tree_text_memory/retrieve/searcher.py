@@ -663,7 +663,7 @@ class Searcher:
                         use_fast_graph=self.use_fast_graph,
                     )
                 )
-            if memory_type in ["RawFileMemory"]:
+            if memory_type in ["All", "RawFileMemory"]:
                 logger.info("[0305test] Retrieving from RawFileMemory")
                 tasks.append(
                     executor.submit(
