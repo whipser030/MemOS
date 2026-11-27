@@ -8,10 +8,14 @@ import os
 import re
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import NAMESPACE_URL, uuid5
 
 from memos.exceptions import MemOSError
+
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 _INJECTION_TAG = re.compile(
@@ -102,7 +106,22 @@ def message_fingerprint(message: dict[str, Any], *, explicit_time: bool = True) 
     ).hexdigest()
 
 
-def _tool_calls(value: Any) -> list[dict[str, Any]] | None:
+def _contains_nul(value: Any) -> bool:
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_contains_nul(key) or _contains_nul(item) for key, item in value.items())
+    if isinstance(value, list | tuple):
+        return any(_contains_nul(item) for item in value)
+    return False
+
+
+def _reject_nul(value: Any, field: str, position: int) -> None:
+    if _contains_nul(value):
+        raise AddRequestError("INVALID_PARAMS", f"message {position + 1} {field} contains a NUL")
+
+
+def _tool_calls(value: Any, position: int) -> list[dict[str, Any]] | None:
     if value is None:
         return None
     if not isinstance(value, list):
@@ -125,7 +144,74 @@ def _tool_calls(value: Any) -> list[dict[str, Any]] | None:
         calls.append(
             {**call, "function": {**function, "arguments": strip_injection(function["arguments"])}}
         )
+    _reject_nul(calls, "tool_calls", position)
     return calls
+
+
+def _project_messages(raw_messages: list[Any]) -> Iterator[tuple[int, str, Any]]:
+    """A tool result owns its invocation. Preserve the caller's result ID and input order."""
+    pending = {}
+    matched = set()
+    inputs = {}
+    for pos, msg in enumerate(raw_messages):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "user":
+            pending.clear()
+        elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+            _tool_calls(msg["tool_calls"], pos)
+            for call in msg["tool_calls"]:
+                pending[call["id"]] = (pos, call)
+        elif (
+            msg.get("role") == "tool"
+            and isinstance(cid := msg.get("tool_call_id"), str)
+            and cid in pending
+        ):
+            owner, inputs[pos] = pending.pop(cid)
+            matched.add((owner, cid))
+
+    for position, raw in enumerate(raw_messages):
+        if isinstance(raw, dict) and raw.get("role") == "assistant" and raw.get("tool_calls"):
+            if raw.get("content") or raw.get("experience_notes"):
+                yield position, "", {**raw, "tool_calls": None}
+            for index, call in enumerate(raw["tool_calls"]):
+                if (position, call["id"]) in matched:
+                    continue
+                # Calls without an output still constitute a tool message with empty content.
+                single = (
+                    len(raw["tool_calls"]) == 1
+                    and not raw.get("content")
+                    and not raw.get("experience_notes")
+                )
+                yield (
+                    position,
+                    f":tool:{index}",
+                    {
+                        **raw,
+                        "role": "tool",
+                        "id": None,
+                        "message_id": (raw.get("message_id") or raw.get("id")) if single else None,
+                        "content": "",
+                        "tool_calls": [call],
+                        "tool_call_id": call["id"],
+                    },
+                )
+            continue
+        elif isinstance(raw, dict) and raw.get("role") == "tool":
+            cid = raw.get("tool_call_id")
+            _reject_nul(cid, "tool_call_id", position)
+            if position in inputs and not raw.get("tool_calls"):
+                raw = {**raw, "tool_calls": [inputs[position]]}
+            if not raw.get("tool_calls"):
+                raise AddRequestError(
+                    "INVALID_PARAMS", "tool message requires the invocation name and arguments"
+                )
+            own = _tool_calls(raw["tool_calls"], position)
+            if len(own) != 1 or own[0]["id"] != cid:
+                raise AddRequestError(
+                    "INVALID_PARAMS", "tool message must contain its own single invocation"
+                )
+        yield position, "", raw
 
 
 def normalize_turns(
@@ -137,7 +223,7 @@ def normalize_turns(
     turns: list[list[dict[str, Any]]] = []
     leading_system: list[dict[str, Any]] = []
     message_ids: set[str] = set()
-    for position, raw in enumerate(raw_messages):
+    for position, id_suffix, raw in _project_messages(raw_messages):
         if not isinstance(raw, dict):
             raise AddRequestError("INVALID_PARAMS", "message must be an object")
         role = raw.get("role")
@@ -146,7 +232,7 @@ def normalize_turns(
         message_id = (
             raw.get("message_id")
             or raw.get("id")
-            or str(uuid5(NAMESPACE_URL, f"memos:project-add:{task_id}:{position}"))
+            or str(uuid5(NAMESPACE_URL, f"memos:project-add:{task_id}:{position}{id_suffix}"))
         )
         if not isinstance(message_id, str) or not message_id.strip() or message_id in message_ids:
             raise AddRequestError(
@@ -174,11 +260,19 @@ def normalize_turns(
         message["raw_sha256"] = message_fingerprint(
             message, explicit_time=bool(raw.get("chat_time"))
         )
-        message["tool_calls"] = _tool_calls(message["tool_calls"])
+        message["tool_calls"] = _tool_calls(message["tool_calls"], position)
         message["content"] = strip_injection(message["content"])
+        for field in ("message_id", "role_id", "role_name", "tool_call_id", "experience_notes"):
+            _reject_nul(message[field], field, position)
+        if role != "tool":
+            _reject_nul(message["content"], "content", position)
         message["content_sha256"] = message_fingerprint(
             message, explicit_time=bool(raw.get("chat_time"))
         )
+        if role == "tool" and "\x00" in message["content"]:
+            # PostgreSQL text cannot hold NUL. Escape backslashes to preserve literal escapes
+            # in this body, and retain the source fingerprint for replay and conflict checks.
+            message["content"] = message["content"].replace("\\", r"\\").replace("\x00", r"\x00")
         if role == "system" and not turns:
             leading_system.append(message)
             continue
